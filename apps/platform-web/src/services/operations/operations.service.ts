@@ -61,8 +61,19 @@ export async function getOperationDetail(operationId: string): Promise<Managemen
   return response.data as ManagementOperation
 }
 
+function buildProjectScopeHeaders(projectId?: string) {
+  const normalizedProjectId = projectId?.trim()
+  return normalizedProjectId
+    ? {
+        'x-project-id': normalizedProjectId
+      }
+    : undefined
+}
+
 export async function submitOperation(payload: SubmitOperationPayload): Promise<ManagementOperation> {
-  const response = await platformHttpClient.post('/api/operations', payload)
+  const response = await platformHttpClient.post('/api/operations', payload, {
+    headers: buildProjectScopeHeaders(payload.project_id)
+  })
   return response.data as ManagementOperation
 }
 

@@ -77,6 +77,9 @@
 
 这个顺序对应的是当前正式 harness 主链，而不是历史服务全集启动顺序。
 
+Windows 本机手启、LightRAG、operations worker、本地 embedding 和停止命令见
+[本地服务启动与停止](./local-service-startup.md)。
+
 ## 4. 各应用启动命令
 
 ### 4.1 `apps/runtime-service`

@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from contextlib import suppress
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 import uvicorn
@@ -13,6 +13,7 @@ import uvicorn
 from app.factory import create_app
 from app.core.context.models import ActorContext
 from app.core.db import build_engine, build_session_factory, create_core_tables, session_scope
+from app.core.errors import ForbiddenError
 from app.core.security import create_access_token, hash_password
 from app.modules.operations.application import CreateOperationCommand, ListOperationsQuery, OperationsService
 from app.modules.operations.application.execution import DatabasePollingOperationDispatcher, OperationExecutorRegistry
@@ -240,6 +241,49 @@ class OperationsStreamingAndRetryTest(unittest.IsolatedAsyncioTestCase):
             server.should_exit = True
             with suppress(asyncio.CancelledError):
                 await asyncio.wait_for(server_task, timeout=5)
+
+    async def test_submit_hydrates_project_membership_without_request_scope(self) -> None:
+        scoped_out = ActorContext(
+            user_id=self.user_id,
+            platform_roles=("platform_super_admin",),
+        )
+        submitted = await self.service.submit_operation(
+            actor=scoped_out,
+            command=CreateOperationCommand(
+                kind="unstable.echo",
+                project_id=self.project_id,
+                input_payload={"value": "hydrate"},
+            ),
+        )
+        fetched = await self.service.get_operation(actor=scoped_out, operation_id=submitted.id)
+
+        self.assertEqual(submitted.status, OperationStatus.SUBMITTED)
+        self.assertEqual(fetched.id, submitted.id)
+        with session_scope(self._session_factory) as session:
+            from app.modules.operations.infra.sqlalchemy.repository import SqlAlchemyOperationsRepository
+
+            stored = SqlAlchemyOperationsRepository(session).get_by_id(submitted.id)
+            self.assertIsNotNone(stored)
+            assert stored is not None
+            self.assertEqual(
+                stored.metadata.get("actor_snapshot", {}).get("project_roles"),
+                {self.project_id: ["project_admin"]},
+            )
+
+        outsider = ActorContext(
+            user_id=str(uuid4()),
+            platform_roles=("platform_super_admin",),
+        )
+        with self.assertRaises(ForbiddenError) as ctx:
+            await self.service.submit_operation(
+                actor=outsider,
+                command=CreateOperationCommand(
+                    kind="unstable.echo",
+                    project_id=self.project_id,
+                    input_payload={"value": "denied"},
+                ),
+            )
+        self.assertEqual(ctx.exception.code, "project_role_missing")
 
 
 if __name__ == "__main__":

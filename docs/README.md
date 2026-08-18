@@ -31,6 +31,7 @@
 ## 3. 启动、部署和运维
 
 - [本地开发说明](./local-dev.md)
+- [本地服务启动与停止](./local-service-startup.md)
 - [环境变量矩阵](./env-matrix.md)
 - [部署文档](./deployment-guide.md)
 - [本地部署契约](./local-deployment-contract.yaml)

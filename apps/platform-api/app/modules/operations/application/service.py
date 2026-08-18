@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from datetime import datetime, timezone
 from time import monotonic
 from uuid import UUID
@@ -11,7 +12,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.context.models import ActorContext
-from app.core.db import SqlAlchemyUnitOfWork
+from app.core.db import SqlAlchemyUnitOfWork, session_scope
 from app.core.errors import BadRequestError, ConflictError, NotAuthenticatedError, NotFoundError, ServiceUnavailableError
 from app.core.identifiers import parse_uuid
 from app.modules.audit.domain import AuditResult
@@ -85,10 +86,37 @@ class OperationsService:
             )
         return self._session_factory
 
+    def _hydrate_actor_for_project(
+        self,
+        *,
+        actor: ActorContext,
+        project_id: str | None,
+    ) -> ActorContext:
+        if not project_id or actor.project_role_set(project_id) or not actor.user_id:
+            return actor
+        try:
+            user_uuid = UUID(actor.user_id)
+            project_uuid = UUID(project_id)
+        except ValueError:
+            return actor
+
+        session_factory = self._require_session_factory()
+        with session_scope(session_factory) as session:
+            role = SqlAlchemyProjectsRepository(session).get_project_member_role(
+                project_id=project_uuid,
+                user_id=user_uuid,
+            )
+        if role is None:
+            return actor
+        next_roles = dict(actor.project_roles)
+        next_roles[project_id] = (role.value,)
+        return replace(actor, project_roles=next_roles)
+
     def _require_read_access(self, *, actor: ActorContext, project_id: str | None) -> None:
+        scoped_actor = self._hydrate_actor_for_project(actor=actor, project_id=project_id)
         if project_id:
             self._policy_engine.require(
-                actor=actor,
+                actor=scoped_actor,
                 authorization=AuthorizationRequest(
                     permission=PermissionCode.PROJECT_OPERATION_READ,
                     project_id=project_id,
@@ -97,16 +125,17 @@ class OperationsService:
             return
 
         self._policy_engine.require(
-            actor=actor,
+            actor=scoped_actor,
             authorization=AuthorizationRequest(
                 permission=PermissionCode.PLATFORM_OPERATION_READ,
             ),
         )
 
     def _require_write_access(self, *, actor: ActorContext, project_id: str | None) -> None:
+        scoped_actor = self._hydrate_actor_for_project(actor=actor, project_id=project_id)
         if project_id:
             self._policy_engine.require(
-                actor=actor,
+                actor=scoped_actor,
                 authorization=AuthorizationRequest(
                     permission=PermissionCode.PROJECT_OPERATION_WRITE,
                     project_id=project_id,
@@ -115,7 +144,7 @@ class OperationsService:
             return
 
         self._policy_engine.require(
-            actor=actor,
+            actor=scoped_actor,
             authorization=AuthorizationRequest(
                 permission=PermissionCode.PLATFORM_OPERATION_WRITE,
             ),
@@ -136,8 +165,9 @@ class OperationsService:
         if extra_permission is None:
             return
 
+        scoped_actor = self._hydrate_actor_for_project(actor=actor, project_id=project_id)
         self._policy_engine.require(
-            actor=actor,
+            actor=scoped_actor,
             authorization=AuthorizationRequest(
                 permission=extra_permission,
                 project_id=project_id,
@@ -188,6 +218,7 @@ class OperationsService:
         session_factory = self._require_session_factory()
         requested_by = _require_actor_identity(actor)
         project_id = _normalize_str(command.project_id)
+        actor = self._hydrate_actor_for_project(actor=actor, project_id=project_id)
         idempotency_key = _normalize_str(command.idempotency_key)
         kind = command.kind.strip()
         metadata = with_actor_snapshot(metadata=command.metadata, actor=actor)

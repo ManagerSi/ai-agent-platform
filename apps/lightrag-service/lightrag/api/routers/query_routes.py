@@ -16,8 +16,8 @@ router = APIRouter(tags=["query"])
 
 class QueryRequest(BaseModel):
     query: str = Field(
-        min_length=3,
-        description="The query text",
+        min_length=1,
+        description="The query text. One character is allowed so CJK keywords such as 报销 remain valid.",
     )
 
     mode: Literal["local", "global", "hybrid", "naive", "mix", "bypass"] = Field(
